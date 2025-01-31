@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +15,15 @@ type ConfigGlobal struct {
 	Bucket    string `json:"bucket"`
 	AccessKey string `json:"access-key"`
 	SecretKey string `json:"secret-key"`
+}
+
+type ConfigBackup struct {
+	Nome          string `json:"nome"`
+	Region        string `json:"region"`
+	Bucket        string `json:"bucket"`
+	SourceFolder  string `json:"source_folder"`
+	S3Prefix      string `json:"s3_prefix"`
+	ArnAssumeRole string `json:"arn_assume_role"`
 }
 
 func GlobalConfigure(c *cli.Context) {
@@ -60,4 +70,53 @@ func jsonCrypt(configGlobal ConfigGlobal) {
 
 	fmt.Println("Arquivo de configuração salvo com sucesso!")
 
+}
+
+func BackupConfigure(c *cli.Context) {
+	scanner := bufio.NewScanner(os.Stdin)
+	var config ConfigBackup
+
+	// Captura informações para gerar arquivo de conf
+	fmt.Print("Nome do Backup (Sem espaços): ")
+	scanner.Scan()
+	config.Nome = scanner.Text()
+
+	fmt.Print("Região AWS: ")
+	scanner.Scan()
+	config.Region = scanner.Text()
+
+	fmt.Print("Nome do Bucket: ")
+	scanner.Scan()
+	config.Bucket = scanner.Text()
+
+	fmt.Print("Pasta de origem: ")
+	scanner.Scan()
+	config.SourceFolder = scanner.Text()
+
+	fmt.Print("Prefixo no S3 (ex: backups/): ")
+	scanner.Scan()
+	config.S3Prefix = scanner.Text()
+
+	// Verifica se a pasta profile existe e cria caso não existir
+	if _, err := os.Stat("profile/"); os.IsNotExist(err) {
+		err = os.MkdirAll("profile", os.ModePerm)
+		if err != nil {
+			fmt.Println("Erro ao criar a pasta profile.")
+		}
+	}
+
+	file, err := os.Create("profile/" + config.Nome + ".json")
+	if err != nil {
+		log.Fatalf("Erro ao criar arquivo: %v", err)
+	}
+	defer file.Close()
+
+	//Gera arquivo Json
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(config); err != nil {
+		log.Fatalf("Erro ao escrever no arquivo: %v", err)
+	}
+
+	fmt.Println("Perfil de Backup salvo com Sucesso!")
 }

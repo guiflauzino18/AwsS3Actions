@@ -44,6 +44,17 @@ func Run() *cli.App {
 			},
 			Action: ListObjects,
 		},
+		{
+			Name:  "backup",
+			Usage: "Configure e faça backup de pastas e arquivos no Amazon S3",
+			Subcommands: []cli.Command{
+				{
+					Name:   "configure",
+					Usage:  "Configura um novo perfil de backup.",
+					Action: BackupConfigure,
+				},
+			},
+		},
 	}
 
 	return app
