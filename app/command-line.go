@@ -53,6 +53,19 @@ func Run() *cli.App {
 					Usage:  "Configura um novo perfil de backup.",
 					Action: BackupConfigure,
 				},
+				{
+					Name:      "run",
+					Usage:     "Executa um backup.",
+					UsageText: "aws-s3-action backup run --profile nomeProfile",
+					Flags: []cli.Flag{
+						cli.StringFlag{
+							Name:     "profile",
+							Usage:    "nome do perfil de backup para executar",
+							Required: true,
+						},
+					},
+					Action: BackupRun,
+				},
 			},
 		},
 	}

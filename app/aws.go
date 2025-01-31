@@ -2,15 +2,86 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/urfave/cli"
 )
+
+func BackupRun(c *cli.Context) {
+	file, err := os.Open("profile/" + c.String("profile") + ".json")
+	if err != nil {
+		log.Fatal("Erro ao ler o arquivo de perfil de backup.")
+	}
+	defer file.Close()
+
+	var configBackup ConfigBackup
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&configBackup); err != nil {
+		log.Fatalf("Erro ao ler Perfil de Backup:\n%v", err)
+	}
+
+	// Recupera a chave de criptografia
+	key, err := os.ReadFile(os.ExpandEnv("$HOME/.aws_key"))
+	if err != nil {
+		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
+	}
+
+	// REcupera o arquivo com os dados
+	configGlobal, err := LoadCredentials("config_global.enc", key)
+	if err != nil {
+		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
+		log.Fatal(err)
+	}
+
+	// Cria um S3Cliente
+	s3Client := createS3Client(configGlobal, configBackup.Region)
+
+	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		realPath, err := filepath.Rel(configBackup.SourceFolder, path)
+		if err != nil {
+			return err
+		}
+
+		s3Key := filepath.Join(configBackup.S3Prefix, realPath)
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+			Bucket: &configBackup.Bucket,
+			Key:    &s3Key,
+			Body:   file,
+		})
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("Arquivo %s enviado para %s/%s\n", path, configBackup.Bucket, s3Key)
+		return nil
+	})
+
+	if err != nil {
+		log.Fatalf("Erro ao fazer backup: %v", err)
+	}
+
+	fmt.Println("Backup concluído com sucesso!")
+}
 
 func ListObjects(c *cli.Context) {
 	// Recupera parametros passados
