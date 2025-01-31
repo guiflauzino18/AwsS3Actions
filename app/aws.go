@@ -28,13 +28,13 @@ func BackupRun(c *cli.Context) {
 	}
 
 	// Recupera a chave de criptografia
-	key, err := os.ReadFile(os.ExpandEnv("$HOME/.aws_key"))
+	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
 	if err != nil {
 		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
 	}
 
 	// REcupera o arquivo com os dados
-	configGlobal, err := LoadCredentials("config_global.enc", key)
+	configGlobal, err := LoadCredentials("conf/config_global.enc", key)
 	if err != nil {
 		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		log.Fatal(err)
@@ -51,29 +51,23 @@ func BackupRun(c *cli.Context) {
 			return nil
 		}
 
+		//Pega caminho completo do arquivo para jogar no nome do objeto no s3
 		realPath, err := filepath.Rel(configBackup.SourceFolder, path)
 		if err != nil {
 			return err
 		}
 
+		//Cria nome do objeto pegando o prefix passado e o realpath
 		s3Key := filepath.Join(configBackup.S3Prefix, realPath)
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
 
-		_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: &configBackup.Bucket,
-			Key:    &s3Key,
-			Body:   file,
-		})
+		// Chama a função para envio do arquivo
+		err = uploadObjetct(path, s3Key, s3Client, configBackup)
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("Arquivo %s enviado para %s/%s\n", path, configBackup.Bucket, s3Key)
 		return nil
+
 	})
 
 	if err != nil {
@@ -81,6 +75,29 @@ func BackupRun(c *cli.Context) {
 	}
 
 	fmt.Println("Backup concluído com sucesso!")
+}
+
+// FAz upload de objetos usando concorrencias
+func uploadObjetct(path, s3Key string, s3Client *s3.Client, configBackup ConfigBackup) error {
+
+	//Pega o arquivo e adicionar em file
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: &configBackup.Bucket,
+		Key:    &s3Key,
+		Body:   file,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Arquivo %s enviado para %s/%s\n", path, configBackup.Bucket, s3Key)
+	return nil
 }
 
 func ListObjects(c *cli.Context) {
@@ -92,13 +109,13 @@ func ListObjects(c *cli.Context) {
 	var delimiter string
 
 	// Recupera a chave de criptografia
-	key, err := os.ReadFile(os.ExpandEnv("$HOME/.aws_key"))
+	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
 	if err != nil {
 		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
 	}
 
 	// REcupera o arquivo com os dados
-	configGlobal, err := LoadCredentials("config_global.enc", key)
+	configGlobal, err := LoadCredentials("conf/config_global.enc", key)
 	if err != nil {
 		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		log.Fatal(err)

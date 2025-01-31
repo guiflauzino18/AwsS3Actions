@@ -87,7 +87,15 @@ func SaveChave() {
 		log.Fatal()
 	}
 
-	erro = saveKeyToFile(key, os.ExpandEnv("$HOME/.aws_key"))
+	// Verifica se a pasta conf existe e cria caso não existir
+	if _, err := os.Stat("conf/"); os.IsNotExist(err) {
+		err = os.MkdirAll("conf", os.ModePerm)
+		if err != nil {
+			fmt.Println("Erro ao criar a pasta conf.")
+		}
+	}
+
+	erro = saveKeyToFile(key, os.ExpandEnv("conf/.aws_key"))
 	if erro != nil {
 		fmt.Println("Erro ao salvar a chave em arquivo")
 		log.Fatal()

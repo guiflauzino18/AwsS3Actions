@@ -52,7 +52,7 @@ func GlobalConfigure(c *cli.Context) {
 
 func jsonCrypt(configGlobal ConfigGlobal) {
 	// Carrega a chave de Criptografia
-	key, err := os.ReadFile(os.ExpandEnv("$HOME/.aws_key"))
+	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
 	if err != nil {
 		log.Fatal("Erro ao carregar a chave de criptografia!")
 	}
@@ -63,7 +63,7 @@ func jsonCrypt(configGlobal ConfigGlobal) {
 	}
 
 	// Criptografa e salva o arquivo
-	err = EncryptAndSave(data, key, "config_global.enc")
+	err = EncryptAndSave(data, key, "conf/config_global.enc")
 	if err != nil {
 		log.Fatal("Erro ao gerar arquivo de configuração!")
 	}
