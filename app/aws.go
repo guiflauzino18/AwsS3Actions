@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -27,6 +28,71 @@ func BackupRun(c *cli.Context) {
 		log.Fatalf("Erro ao ler Perfil de Backup:\n%v", err)
 	}
 
+	// Criando um canal para distribuir os arquivos
+	fileCh := make(chan string)
+	numWorkers := 10 // Define o número de workers
+	var wg sync.WaitGroup
+
+	// Inicia os workers antes de enviar os arquivos para o canal
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go workerPool(fileCh, &wg, &configBackup)
+	}
+
+	fmt.Println("Adicionando arquivos para envio...")
+	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		//envia o arquivo atual para o canal
+		fileCh <- path
+
+		return nil
+
+	})
+	if err != nil {
+		log.Fatalf("Erro ao fazer backup: %v", err)
+	}
+
+	close(fileCh) // Fecha o canal após adicionar os arquivos
+
+	wg.Wait()
+}
+
+// Workerpool para envio dos arquivos
+func workerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup) {
+	defer wg.Done()
+	errCh := make(chan error, 5) // Canal de erros
+
+	go func() {
+		defer wg.Done()
+		for file := range fileCh { // Cada worker processa arquivos do canal
+
+			// Chama a função para envio do arquivo
+			uploadObjetct(file, *configBackup, errCh)
+		}
+	}()
+
+	wg.Wait() // Aguarda todos os uploads terminarem
+	defer close(errCh)
+
+	// Exibindo erros, se houver
+	for err := range errCh {
+		log.Println("❌ Erro:", err)
+	}
+
+	fmt.Println("===========================================================================")
+	fmt.Println("Envios dos arquivo concluídos!")
+	fmt.Println("===========================================================================")
+}
+
+// FAz upload de objetos usando concorrencias
+func uploadObjetct(path string, configBackup ConfigBackup, errCh chan error) error {
+
 	// Recupera a chave de criptografia
 	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
 	if err != nil {
@@ -43,47 +109,19 @@ func BackupRun(c *cli.Context) {
 	// Cria um S3Cliente
 	s3Client := createS3Client(configGlobal, configBackup.Region)
 
-	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-
-		//Pega caminho completo do arquivo para jogar no nome do objeto no s3
-		realPath, err := filepath.Rel(configBackup.SourceFolder, path)
-		if err != nil {
-			return err
-		}
-
-		//Cria nome do objeto pegando o prefix passado e o realpath
-		s3Key := filepath.Join(configBackup.S3Prefix, realPath)
-
-		// Chama a função para envio do arquivo
-		err = uploadObjetct(path, s3Key, s3Client, configBackup)
-		if err != nil {
-			return err
-		}
-
-		return nil
-
-	})
-
+	//Pega caminho completo do arquivo para jogar no nome do objeto no s3
+	realPath, err := filepath.Rel(configBackup.SourceFolder, path)
 	if err != nil {
-		log.Fatalf("Erro ao fazer backup: %v", err)
+		errCh <- fmt.Errorf("Erro 109")
 	}
 
-	fmt.Println("Backup concluído com sucesso!")
-}
-
-// FAz upload de objetos usando concorrencias
-func uploadObjetct(path, s3Key string, s3Client *s3.Client, configBackup ConfigBackup) error {
+	//Cria nome do objeto pegando o prefix passado e o realpath
+	s3Key := filepath.Join(configBackup.S3Prefix, realPath)
 
 	//Pega o arquivo e adicionar em file
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		errCh <- fmt.Errorf("Erro 118")
 	}
 	defer file.Close()
 
@@ -93,7 +131,7 @@ func uploadObjetct(path, s3Key string, s3Client *s3.Client, configBackup ConfigB
 		Body:   file,
 	})
 	if err != nil {
-		return err
+		errCh <- fmt.Errorf("Erro 128")
 	}
 
 	fmt.Printf("Arquivo %s enviado para %s/%s\n", path, configBackup.Bucket, s3Key)
