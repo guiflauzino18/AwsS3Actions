@@ -1,17 +1,21 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/urfave/cli"
 )
 
@@ -112,7 +116,7 @@ func uploadObjetct(path string, configBackup ConfigBackup, errCh chan error) err
 	//Pega caminho completo do arquivo para jogar no nome do objeto no s3
 	realPath, err := filepath.Rel(configBackup.SourceFolder, path)
 	if err != nil {
-		errCh <- fmt.Errorf("Erro 109")
+		errCh <- fmt.Errorf("Erro ao pegar caminho completo do arquivo")
 	}
 
 	//Cria nome do objeto pegando o prefix passado e o realpath
@@ -121,21 +125,154 @@ func uploadObjetct(path string, configBackup ConfigBackup, errCh chan error) err
 	//Pega o arquivo e adicionar em file
 	file, err := os.Open(path)
 	if err != nil {
-		errCh <- fmt.Errorf("Erro 118")
+		errCh <- fmt.Errorf("Erro ao abrir arquivo")
 	}
 	defer file.Close()
 
-	_, err = s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	// Obtém o tamanho do arquivo
+	fileInfo, _ := file.Stat()
+	fileSize := fileInfo.Size()
+
+	// Decide o método de upload
+	if fileSize < 10*1024*1024 { // < 10 MB
+		uploadSingle(file, s3Client, configBackup, s3Key, errCh)
+	} else {
+		uploadMultipart(file, fileSize, s3Client, configBackup, s3Key, errCh)
+	}
+
+	return nil
+}
+
+// Upload normal para arquivos pequenos
+func uploadSingle(file *os.File, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
+	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket: &configBackup.Bucket,
 		Key:    &s3Key,
 		Body:   file,
 	})
 	if err != nil {
-		errCh <- fmt.Errorf("Erro 128")
+		errCh <- fmt.Errorf("❌ Erro no upload do arquivo: (%s): %v", s3Key, err)
+	} else {
+		fmt.Printf("✅ Arquivo %s enviado para %s\n", s3Key, configBackup.Bucket)
+	}
+}
+
+// Multipart Upload para arquivos grandes
+func uploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
+	//Inicia o Multipart Upload
+	resp, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
+		Bucket: &configBackup.Bucket,
+		Key:    &s3Key,
+	})
+	if err != nil {
+		errCh <- fmt.Errorf("Erro ao iniciar Multipart Upload: %v", err)
+		return
+	}
+	uploadID := *resp.UploadId
+
+	// Define o tamanho das partes
+	partSize := int64(10 * 1024 * 1024) // 10 MB
+	totalParts := (fileSize + partSize - 1) / partSize
+
+	// Upload das partes em paralelo
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var parts []types.CompletedPart
+
+	errChan := make(chan error, totalParts)
+
+	for partNumber := int64(1); partNumber <= totalParts; partNumber++ {
+		wg.Add(1)
+		go func(partNumber int64) {
+			defer wg.Done()
+
+			// Calcula o deslocamento correto da parte
+			offset := (partNumber - 1) * partSize
+			partBuffer := make([]byte, partSize)
+
+			// Garante que cada parte leia do offset correto
+			mu.Lock()
+			_, err := file.Seek(offset, io.SeekStart)
+			if err != nil {
+				mu.Unlock()
+				errChan <- fmt.Errorf("Erro ao buscar parte %d: %v", partNumber, err)
+				return
+			}
+			n, err := file.Read(partBuffer)
+			mu.Unlock()
+
+			if err != nil && err != io.EOF {
+				errChan <- fmt.Errorf("Erro ao ler parte %d: %v", partNumber, err)
+				return
+			}
+
+			//Converter Partnumber para int32
+			pNum := int32(partNumber)
+
+			// Envia a parte
+			partResp, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+				Bucket:     &configBackup.Bucket,
+				Key:        &s3Key,
+				UploadId:   &uploadID,
+				PartNumber: &pNum,
+				Body:       bytes.NewReader(partBuffer[:n]),
+			})
+			if err != nil {
+				errChan <- fmt.Errorf("Erro ao enviar parte %d: %v", partNumber, err)
+				return
+			}
+
+			// Armazena informações da parte
+			mu.Lock()
+			parts = append(parts, types.CompletedPart{
+				ETag:       partResp.ETag,
+				PartNumber: &pNum,
+			})
+			mu.Unlock()
+		}(partNumber)
 	}
 
-	fmt.Printf("Arquivo %s enviado para %s/%s\n", path, configBackup.Bucket, s3Key)
-	return nil
+	wg.Wait()
+	close(errChan)
+
+	// Verifica se houve erro
+	for err := range errChan {
+		abortMultipartUpload(s3Client, configBackup, s3Key, uploadID)
+		errCh <- fmt.Errorf(err.Error())
+		return
+	}
+
+	// Ordena as partes antes de finalizar o upload
+	sort.Slice(parts, func(i, j int) bool {
+		return *parts[i].PartNumber < *parts[j].PartNumber
+	})
+
+	// Finaliza o upload
+	_, err = s3Client.CompleteMultipartUpload(context.TODO(), &s3.CompleteMultipartUploadInput{
+		Bucket:   &configBackup.Bucket,
+		Key:      &s3Key,
+		UploadId: &uploadID,
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: parts,
+		},
+	})
+	if err != nil {
+		abortMultipartUpload(s3Client, configBackup, s3Key, uploadID)
+		errCh <- fmt.Errorf("Erro ao finalizar Multipart Upload: %v", err)
+		return
+	}
+
+	fmt.Printf("✅ Arquivo %s enviado para %s\n!", s3Key, configBackup.Bucket)
+}
+
+// Aborta Multipart Upload em caso de erro
+func abortMultipartUpload(s3Client *s3.Client, configBackup ConfigBackup, s3Key, uploadID string) {
+	_, _ = s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
+		Bucket:   &configBackup.Bucket,
+		Key:      &s3Key,
+		UploadId: &uploadID,
+	})
+	fmt.Printf("❌ Multipart Upload abortado para %s\n", s3Key)
 }
 
 func ListObjects(c *cli.Context) {
