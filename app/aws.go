@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -145,7 +146,16 @@ func uploadObjetct(path string, configBackup ConfigBackup, errCh chan error) err
 
 // Upload normal para arquivos pequenos
 func uploadSingle(file *os.File, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
-	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+
+	// Calcula o hash MD5 localmente
+	hash := md5.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		errCh <- fmt.Errorf("Erro ao cacular o MD5 do arquivo %s", file)
+	}
+
+	localMD5 := fmt.Sprintf("\"%x\"", hash.Sum(nil))
+
+	result, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket: &configBackup.Bucket,
 		Key:    &s3Key,
 		Body:   file,
@@ -153,8 +163,13 @@ func uploadSingle(file *os.File, s3Client *s3.Client, configBackup ConfigBackup,
 	if err != nil {
 		errCh <- fmt.Errorf("❌ Erro no upload do arquivo: (%s): %v", s3Key, err)
 	} else {
+		// Verifica a integridade do upload
+		if result.ETag != &localMD5 {
+			errCh <- fmt.Errorf("Erro de integridade: Etag do S3 (%s) diferente do MD5 local (%s) para o arquivo %s", *result.ETag, localMD5, file)
+		}
 		fmt.Printf("✅ Arquivo %s enviado para %s\n", s3Key, configBackup.Bucket)
 	}
+
 }
 
 // Multipart Upload para arquivos grandes
