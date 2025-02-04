@@ -200,6 +200,17 @@ func uploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 	// Máximo de tentativas de enviar uma parte que deu erro.
 	const maxRetries = 3
 
+	// Progresso do envio
+	progressChan := make(chan int64)
+	go func() {
+		totalUploaded := int64(0)
+		for uploaded := range progressChan {
+			totalUploaded += uploaded
+			percentage := float64(totalUploaded) / float64(fileSize) * 100
+			fmt.Printf("\r🚀 Progresso: %.2f%%", percentage)
+		}
+	}()
+
 	for partNumber := int64(1); partNumber <= totalParts; partNumber++ {
 		wg.Add(1)
 		go func(partNumber int64) {
@@ -248,6 +259,9 @@ func uploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 					return
 				}
 
+				// Cada parte enviada atualiza o progresso
+				progressChan <- int64(n)
+
 				if err == nil {
 					break
 				}
@@ -267,11 +281,13 @@ func uploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 				PartNumber: &pNum,
 			})
 			mu.Unlock()
+
 		}(partNumber)
 	}
 
 	wg.Wait()
 	close(errChan)
+	close(progressChan)
 
 	// Verifica se houve erro
 	for err := range errChan {
