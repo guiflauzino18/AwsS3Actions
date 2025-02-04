@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -196,47 +197,69 @@ func uploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 
 	errChan := make(chan error, totalParts)
 
+	// Máximo de tentativas de enviar uma parte que deu erro.
+	const maxRetries = 3
+
 	for partNumber := int64(1); partNumber <= totalParts; partNumber++ {
 		wg.Add(1)
 		go func(partNumber int64) {
 			defer wg.Done()
 
-			// Calcula o deslocamento correto da parte
-			offset := (partNumber - 1) * partSize
-			partBuffer := make([]byte, partSize)
-
-			// Garante que cada parte leia do offset correto
-			mu.Lock()
-			_, err := file.Seek(offset, io.SeekStart)
-			if err != nil {
-				mu.Unlock()
-				errChan <- fmt.Errorf("Erro ao buscar parte %d: %v", partNumber, err)
-				return
-			}
-			n, err := file.Read(partBuffer)
-			mu.Unlock()
-
-			if err != nil && err != io.EOF {
-				errChan <- fmt.Errorf("Erro ao ler parte %d: %v", partNumber, err)
-				return
-			}
+			// Controle de tentativas de envios com falha
+			var partResp *s3.UploadPartOutput
+			var err error
+			var attempt int
 
 			//Converter Partnumber para int32
 			pNum := int32(partNumber)
 
-			// Envia a parte
-			partResp, err := s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
-				Bucket:     &configBackup.Bucket,
-				Key:        &s3Key,
-				UploadId:   &uploadID,
-				PartNumber: &pNum,
-				Body:       bytes.NewReader(partBuffer[:n]),
-			})
-			if err != nil {
-				errChan <- fmt.Errorf("Erro ao enviar parte %d: %v", partNumber, err)
-				return
+			for attempt = 0; attempt < maxRetries; attempt++ {
+
+				// Calcula o deslocamento correto da parte
+				offset := (partNumber - 1) * partSize
+				partBuffer := make([]byte, partSize)
+
+				// Garante que cada parte leia do offset correto
+				mu.Lock()
+				_, err := file.Seek(offset, io.SeekStart)
+				if err != nil {
+					mu.Unlock()
+					errChan <- fmt.Errorf("Erro ao buscar parte %d: %v", partNumber, err)
+					return
+				}
+				n, err := file.Read(partBuffer)
+				mu.Unlock()
+
+				if err != nil && err != io.EOF {
+					errChan <- fmt.Errorf("Erro ao ler parte %d: %v", partNumber, err)
+					return
+				}
+
+				// Envia a parte
+				partResp, err = s3Client.UploadPart(context.TODO(), &s3.UploadPartInput{
+					Bucket:     &configBackup.Bucket,
+					Key:        &s3Key,
+					UploadId:   &uploadID,
+					PartNumber: &pNum,
+					Body:       bytes.NewReader(partBuffer[:n]),
+				})
+				if err != nil {
+					errChan <- fmt.Errorf("Erro ao enviar parte %d: %v", partNumber, err)
+					return
+				}
+
+				if err == nil {
+					break
+				}
+
+				log.Printf("Erro ao enviar parte %d (tentativa %d): %v", partNumber, attempt+1, err)
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+
 			}
 
+			if err != nil {
+				errCh <- fmt.Errorf("Falha ao enviar parte %d após %d tentativas: %v", partNumber, maxRetries, err)
+			}
 			// Armazena informações da parte
 			mu.Lock()
 			parts = append(parts, types.CompletedPart{
