@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -327,6 +328,113 @@ func abortMultipartUpload(s3Client *s3.Client, configBackup ConfigBackup, s3Key,
 		UploadId: &uploadID,
 	})
 	fmt.Printf("❌ Multipart Upload abortado para %s\n", s3Key)
+}
+
+// Restore de objetos
+func RestoreObject(c *cli.Context) {
+	//Recupera parâmetros do comando
+	bucket := c.String("bucket")
+	prefix := c.String("prefix")
+	version := c.String("version")
+	local := c.String("local")
+	region := c.String("region")
+
+	// Recupera a chave de criptografia
+	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
+	if err != nil {
+		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
+	}
+
+	// REcupera o arquivo com os dados
+	configGlobal, err := LoadCredentials("conf/config_global.enc", key)
+	if err != nil {
+		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
+		log.Fatal(err)
+	}
+
+	// Atribui valores padrão se não for passado
+	if bucket == "" {
+		bucket = configGlobal.Bucket
+	}
+
+	err = downloadObject(*configGlobal, bucket, prefix, version, local, region)
+	if err != nil {
+		fmt.Printf("Erro no Download do Arquivo:\n %v", err)
+	}
+
+}
+
+// Função para download de objetos
+func downloadObject(configGlobal ConfigGlobal, bucket, prefix, version, local, region string) error {
+
+	nomeArquivo := strings.Split(prefix, "/")
+	fmt.Println("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
+
+	file, err := os.Create(local + "/" + nomeArquivo[len(nomeArquivo)-1])
+	if err != nil {
+		return fmt.Errorf("Erro ao criar arquivo local: %v", err)
+	}
+	defer file.Close()
+
+	// Cria input e caso a versão seja especificada é passada na requisição.
+	input := &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &prefix,
+	}
+	if version != "" {
+		input.VersionId = &version
+	}
+
+	// Se region não for especificado pega da conf padrao
+	if region == "" {
+		region = configGlobal.Region
+	}
+
+	s3Client := createS3Client(&configGlobal, region)
+
+	resp, err := s3Client.GetObject(context.TODO(), input)
+	if err != nil {
+		return fmt.Errorf("Erro ao baixar arquivo do S3: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Progresso do download
+	totalSize := resp.ContentLength
+	progressChan := make(chan int64)
+
+	go func() {
+		totalBaixado := int64(0)
+		for baixado := range progressChan {
+			totalBaixado += baixado
+			porcent := float64(totalBaixado) / float64(*totalSize) * 100
+			fmt.Printf("\r Progresso: %.2f%%", porcent)
+		}
+	}()
+
+	buf := make([]byte, 1024*1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, err := file.Write(buf[:n]); err != nil {
+				return fmt.Errorf("Erro ao escrever no arquivo local: %v", err)
+			}
+			progressChan <- int64(n)
+		}
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return fmt.Errorf("Erro ao ler dados do Bucket: %v", err)
+		}
+
+	}
+	close(progressChan)
+
+	fmt.Printf("\n✅ Download concluído: %s\n", local+nomeArquivo[len(nomeArquivo)-1])
+
+	return nil
+
 }
 
 func ListObjects(c *cli.Context) {

@@ -68,6 +68,36 @@ func Run() *cli.App {
 				},
 			},
 		},
+		{
+			Name:      "restore",
+			Usage:     "Download de arquivos do S3 para o ambiente local",
+			UsageText: "aws-s3-actions restore --prefix --local [--version] [--bucket] [--region]\n \n   Ex.: aws-s3-actions restore --prefix Backup/Pasta/arquivo.txt --local /root --version 5ez3MI7Z4vLeEFn7i9SJHSynkEfjx8iG\n \n   Use aws-s3-actions list --prefix --show-version para listar objeto e suas versões",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:     "prefix",
+					Usage:    "Nome do objeto para download",
+					Required: true,
+				},
+				cli.StringFlag{
+					Name:  "version",
+					Usage: "Opcional, versão do objeto para download. Se não especificado baixa a versão mais recente.",
+				},
+				cli.StringFlag{
+					Name:  "bucket",
+					Usage: "Opcional, se não informado será usado o bucket padrão",
+				},
+				cli.StringFlag{
+					Name:     "local",
+					Usage:    "Caminho local para salvar o objeto.",
+					Required: true,
+				},
+				cli.StringFlag{
+					Name:  "region",
+					Usage: "Opcional, se não informado é usado região padrão.",
+				},
+			},
+			Action: RestoreObject,
+		},
 	}
 
 	return app
