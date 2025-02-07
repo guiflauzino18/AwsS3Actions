@@ -23,16 +23,24 @@ import (
 )
 
 func BackupRun(c *cli.Context) {
+	// lê arquivo json de perfil de backup
 	file, err := os.Open("profile/" + c.String("profile") + ".json")
 	if err != nil {
 		log.Fatal("Erro ao ler o arquivo de perfil de backup.")
 	}
 	defer file.Close()
 
+	// Cria um struct de configBackup com os dados do json
 	var configBackup ConfigBackup
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&configBackup); err != nil {
 		log.Fatalf("Erro ao ler Perfil de Backup:\n%v", err)
+	}
+
+	// Recupera s3Client
+	s3Client, _, err := CreateS3Client(configBackup.Region)
+	if err != nil {
+		log.Fatalf("Erro ao criar s3Client: %v", err)
 	}
 
 	// Criando um canal para distribuir os arquivos
@@ -43,11 +51,12 @@ func BackupRun(c *cli.Context) {
 	// Inicia os workers antes de enviar os arquivos para o canal
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go workerPool(fileCh, &wg, &configBackup)
+		go workerPool(fileCh, &wg, &configBackup, *s3Client)
 	}
 
 	fmt.Println("Adicionando arquivos para envio...")
 	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
+
 		if err != nil {
 			return err
 		}
@@ -71,7 +80,7 @@ func BackupRun(c *cli.Context) {
 }
 
 // Workerpool para envio dos arquivos
-func workerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup) {
+func workerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup, s3Client s3.Client) {
 	defer wg.Done()
 	errCh := make(chan error, 5) // Canal de erros
 
@@ -79,8 +88,7 @@ func workerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBack
 		defer wg.Done()
 		for file := range fileCh { // Cada worker processa arquivos do canal
 
-			// Chama a função para envio do arquivo
-			uploadObjetct(file, *configBackup, errCh)
+			uploadObjetct(file, *configBackup, s3Client, errCh)
 		}
 	}()
 
@@ -98,25 +106,8 @@ func workerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBack
 }
 
 // FAz upload de objetos usando concorrencias
-func uploadObjetct(path string, configBackup ConfigBackup, errCh chan error) error {
+func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client, errCh chan error) error {
 
-	// Recupera a chave de criptografia
-	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
-	if err != nil {
-		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
-	}
-
-	// REcupera o arquivo com os dados
-	configGlobal, err := LoadCredentials("conf/config_global.enc", key)
-	if err != nil {
-		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
-		log.Fatal(err)
-	}
-
-	// Cria um S3Cliente
-	s3Client := createS3Client(configGlobal, configBackup.Region)
-
-	//Pega caminho completo do arquivo para jogar no nome do objeto no s3
 	realPath, err := filepath.Rel(configBackup.SourceFolder, path)
 	if err != nil {
 		errCh <- fmt.Errorf("Erro ao pegar caminho completo do arquivo")
@@ -138,9 +129,9 @@ func uploadObjetct(path string, configBackup ConfigBackup, errCh chan error) err
 
 	// Decide o método de upload
 	if fileSize < 10*1024*1024 { // < 10 MB
-		uploadSingle(file, s3Client, configBackup, s3Key, errCh)
+		uploadSingle(file, &s3Client, configBackup, s3Key, errCh)
 	} else {
-		uploadMultipart(file, fileSize, s3Client, configBackup, s3Key, errCh)
+		UploadMultipart(file, fileSize, &s3Client, configBackup, s3Key, errCh)
 	}
 
 	return nil
@@ -175,7 +166,7 @@ func uploadSingle(file *os.File, s3Client *s3.Client, configBackup ConfigBackup,
 }
 
 // Multipart Upload para arquivos grandes
-func uploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
+func UploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
 	//Inicia o Multipart Upload
 	resp, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
 		Bucket: &configBackup.Bucket,
@@ -330,42 +321,8 @@ func abortMultipartUpload(s3Client *s3.Client, configBackup ConfigBackup, s3Key,
 	fmt.Printf("❌ Multipart Upload abortado para %s\n", s3Key)
 }
 
-// Restore de objetos
-func RestoreObject(c *cli.Context) {
-	//Recupera parâmetros do comando
-	bucket := c.String("bucket")
-	prefix := c.String("prefix")
-	version := c.String("version")
-	local := c.String("local")
-	region := c.String("region")
-
-	// Recupera a chave de criptografia
-	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
-	if err != nil {
-		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
-	}
-
-	// REcupera o arquivo com os dados
-	configGlobal, err := LoadCredentials("conf/config_global.enc", key)
-	if err != nil {
-		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
-		log.Fatal(err)
-	}
-
-	// Atribui valores padrão se não for passado
-	if bucket == "" {
-		bucket = configGlobal.Bucket
-	}
-
-	err = downloadObject(*configGlobal, bucket, prefix, version, local, region)
-	if err != nil {
-		fmt.Printf("Erro no Download do Arquivo:\n %v", err)
-	}
-
-}
-
 // Função para download de objetos
-func downloadObject(configGlobal ConfigGlobal, bucket, prefix, version, local, region string) error {
+func downloadObject(configGlobal *ConfigGlobal, s3Client s3.Client, bucket, prefix, version, local, region string) error {
 
 	nomeArquivo := strings.Split(prefix, "/")
 	fmt.Println("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
@@ -389,8 +346,6 @@ func downloadObject(configGlobal ConfigGlobal, bucket, prefix, version, local, r
 	if region == "" {
 		region = configGlobal.Region
 	}
-
-	s3Client := createS3Client(&configGlobal, region)
 
 	resp, err := s3Client.GetObject(context.TODO(), input)
 	if err != nil {
@@ -437,42 +392,7 @@ func downloadObject(configGlobal ConfigGlobal, bucket, prefix, version, local, r
 
 }
 
-func ListObjects(c *cli.Context) {
-	// Recupera parametros passados
-	bucket := c.String("bucket")
-	region := c.String("region")
-	prefix := c.String("prefix")
-	showVersion := c.Bool("show-version")
-	var delimiter string
-
-	// Recupera a chave de criptografia
-	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
-	if err != nil {
-		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
-	}
-
-	// REcupera o arquivo com os dados
-	configGlobal, err := LoadCredentials("conf/config_global.enc", key)
-	if err != nil {
-		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
-		log.Fatal(err)
-	}
-
-	// Preenche bucket e region com valor padrão se não definido
-	if bucket == "" {
-		bucket = configGlobal.Bucket
-	}
-
-	if region == "" {
-		region = configGlobal.Region
-	}
-
-	if prefix != "" {
-		delimiter = "/"
-	}
-
-	// Cria um S3Cliente
-	s3Client := createS3Client(configGlobal, region)
+func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3Client s3.Client) {
 
 	input := &s3.ListObjectsV2Input{
 		Bucket:    &bucket,
@@ -512,7 +432,28 @@ func ListObjects(c *cli.Context) {
 }
 
 // Cria Client S3
-func createS3Client(configGlobal *ConfigGlobal, region string) *s3.Client {
+func CreateS3Client(region string) (*s3.Client, ConfigGlobal, error) {
+
+	var configGlobal *ConfigGlobal
+
+	// Recupera a chave de criptografia
+	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
+	if err != nil {
+		fmt.Printf("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
+		return nil, *configGlobal, err
+	}
+
+	// REcupera o arquivo com os dados
+	configGlobal, err = LoadCredentials("conf/config_global.enc", key)
+	if err != nil {
+		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
+		return nil, *configGlobal, err
+	}
+
+	if region == "" {
+		region = configGlobal.Region
+	}
+
 	cfg, erro := config.LoadDefaultConfig(context.TODO(),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			configGlobal.AccessKey, configGlobal.SecretKey, "",
@@ -521,8 +462,8 @@ func createS3Client(configGlobal *ConfigGlobal, region string) *s3.Client {
 	)
 
 	if erro != nil {
-		log.Fatal(erro)
+		return nil, *configGlobal, err
 	}
 
-	return s3.NewFromConfig(cfg)
+	return s3.NewFromConfig(cfg), *configGlobal, nil
 }

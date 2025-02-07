@@ -6,6 +6,9 @@ package app
 */
 
 import (
+	"fmt"
+	"log"
+
 	"github.com/urfave/cli"
 )
 
@@ -42,7 +45,7 @@ func Run() *cli.App {
 					Usage: "Exibir versões antesriores de objetos",
 				},
 			},
-			Action: ListObjects,
+			Action: ListObjectsCommand,
 		},
 		{
 			Name:  "backup",
@@ -101,5 +104,60 @@ func Run() *cli.App {
 	}
 
 	return app
+
+}
+
+func ListObjectsCommand(c *cli.Context) {
+	// Recupera parametros passados
+	bucket := c.String("bucket")
+	region := c.String("region")
+	prefix := c.String("prefix")
+	showVersion := c.Bool("show-version")
+	var delimiter string
+
+	s3Client, configGlobal, err := CreateS3Client(region)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	// Preenche bucket e region com valor padrão se não definido
+	if bucket == "" {
+		bucket = configGlobal.Bucket
+	}
+
+	if region == "" {
+		region = configGlobal.Region
+	}
+
+	if prefix != "" {
+		delimiter = "/"
+	}
+
+	ListObjects(bucket, region, prefix, delimiter, showVersion, *s3Client)
+}
+
+// Restore de objetos
+func RestoreObject(c *cli.Context) {
+	//Recupera parâmetros do comando
+	bucket := c.String("bucket")
+	prefix := c.String("prefix")
+	version := c.String("version")
+	local := c.String("local")
+	region := c.String("region")
+
+	s3Client, configGlobal, err := CreateS3Client(region)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	// Atribui valores padrão se não for passado
+	if bucket == "" {
+		bucket = configGlobal.Bucket
+	}
+
+	err = downloadObject(&configGlobal, *s3Client, bucket, prefix, version, local, region)
+	if err != nil {
+		fmt.Printf("Erro no Download do Arquivo:\n %v", err)
+	}
 
 }
