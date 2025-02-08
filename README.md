@@ -16,10 +16,20 @@ AWS S3 Actions tem a função de facilitar as operações de backup e restore de
 
 <h3>Pré Ajustes:</h3>
 
-- Crie uma conta no IAM da AWS com permissão de S3FullAccess.
+- Crie uma conta no IAM da AWS com no mínimo as seguintes permissões:
+ "s3:PutObject",
+ "s3:GetObject",
+ "s3:AbortMultipartUpload",
+ "s3:DeleteObjectVersion",
+ "s3:GetObjectAttributes",
+ "s3:DeleteObject",
+ "s3:GetObjectVersion",
+ "s3:ListMultipartUploadParts",
+ "s3:ListBucket",
+ "s3:ListBucketVersions"
 - Gere um Access Key ID e o Secret Access Key para a conta.
 - Execute `aws-s3-actions configure` para configurar a autenticação e definir alguns valores Default. Os dados informados aqui são armazenados em um arquivo criptografado.
-- Teste executando `aws-s3-actions list` e espere o retorno de objetos armazenados no bucket passado na configuração padrão.
+- Teste executando `aws-s3-actions list` e se houver objetos armazenados no bucket passado na configuração padrão eles serão listados.
 
 <h3>Listando objetos</h3>
 
