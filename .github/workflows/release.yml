@@ -21,7 +21,7 @@ jobs:
       - name: Compilar binário
         run: |
           cd src/
-          GOOS=linux GOARCH=amd64 go build -o src/aws-s3-actions main.go
+          GOOS=linux GOARCH=amd64 go build -o aws-s3-actions main.go
 
       - name: Criar Release no GitHub
         uses: softprops/action-gh-release@v1
