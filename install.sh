@@ -21,7 +21,13 @@ curl -L -o $BIN "$LATEST_RELEASE"
 echo "Dando permissão de execução..."
 chmod +x $BIN
 
+echo "Criando pasta da aplicação"
+mkdir /usr/local/$BIN/
+
 echo "Movendo para /usr/local/bin/..."
-mv $BIN /usr/local/bin/$BIN
+mv $BIN /usr/local/$BIN/$BIN
+
+echo "Criando link em bin"
+ln -s /usr/local/$BIN/$BIN /usr/local/bin/$BIN
 
 echo "Instalação concluída! Agora você pode executar '$BIN' de qualquer lugar."
