@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Nome do repositório no GitHub (troque pelo seu)
-REPO="seu-usuario/seu-repo"
+REPO="guiflauzino18/AwsS3Actions"
 
 # Nome do binário gerado pelo Go
-BIN="minha-app-linux"
+BIN="aws-s3-actions"
 
 # URL do último release no GitHub
 LATEST_RELEASE=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep "browser_download_url" | cut -d '"' -f 4)
