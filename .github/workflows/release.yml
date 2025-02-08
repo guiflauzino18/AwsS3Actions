@@ -5,6 +5,9 @@ on:
     tags:
       - "v*.*.*"  # Aciona apenas quando um tag SemVer é criada
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
