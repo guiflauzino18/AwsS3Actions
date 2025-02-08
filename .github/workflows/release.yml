@@ -1,0 +1,32 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"  # Aciona apenas quando um tag SemVer é criada
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v3
+
+      - name: Configurar Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Compilar binário
+        run: |
+          mkdir -p dist
+          GOOS=linux GOARCH=amd64 go build -o dist/aws-s3-actions main.go
+
+      - name: Criar Release no GitHub
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/minha-app-linux
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
