@@ -52,7 +52,7 @@ func GlobalConfigure(c *cli.Context) {
 
 func jsonCrypt(configGlobal ConfigGlobal) {
 	// Carrega a chave de Criptografia
-	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
+	key, err := os.ReadFile(os.ExpandEnv("/usr/local/bin/aws-s3-actions/conf/.aws_key"))
 	if err != nil {
 		log.Fatal("Erro ao carregar a chave de criptografia!")
 	}
@@ -63,7 +63,7 @@ func jsonCrypt(configGlobal ConfigGlobal) {
 	}
 
 	// Criptografa e salva o arquivo
-	err = EncryptAndSave(data, key, "conf/config_global.enc")
+	err = EncryptAndSave(data, key, "/usr/local/bin/aws-s3-actions/conf/config_global.enc")
 	if err != nil {
 		log.Fatal("Erro ao gerar arquivo de configuração!")
 	}
@@ -98,14 +98,14 @@ func BackupConfigure(c *cli.Context) {
 	config.S3Prefix = scanner.Text()
 
 	// Verifica se a pasta profile existe e cria caso não existir
-	if _, err := os.Stat("profile/"); os.IsNotExist(err) {
-		err = os.MkdirAll("profile", os.ModePerm)
+	if _, err := os.Stat("/usr/local/bin/aws-s3-actions/profile/"); os.IsNotExist(err) {
+		err = os.MkdirAll("/usr/local/bin/aws-s3-actions/profile", os.ModePerm)
 		if err != nil {
 			fmt.Println("Erro ao criar a pasta profile.")
 		}
 	}
 
-	file, err := os.Create("profile/" + config.Nome + ".json")
+	file, err := os.Create("/usr/local/bin/aws-s3-actions/profile/" + config.Nome + ".json")
 	if err != nil {
 		log.Fatalf("Erro ao criar arquivo: %v", err)
 	}
