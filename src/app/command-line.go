@@ -122,7 +122,7 @@ func ListObjectsCommand(c *cli.Context) {
 
 	s3Client, configGlobal, err := CreateS3Client(region)
 	if err != nil {
-		log.Fatal(err.Error())
+		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 	}
 
 	// Preenche bucket e region com valor padrão se não definido
@@ -152,6 +152,7 @@ func RestoreObject(c *cli.Context) {
 
 	s3Client, configGlobal, err := CreateS3Client(region)
 	if err != nil {
+		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		log.Fatal(err.Error())
 	}
 
@@ -186,7 +187,8 @@ func backupRun(c *cli.Context) {
 	// Recupera s3Client
 	s3Client, _, err := CreateS3Client(configBackup.Region)
 	if err != nil {
-		log.Fatalf("Erro ao criar s3Client: %v", err)
+		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
+		log.Fatal(err)
 	}
 
 	// Criando um canal para distribuir os arquivos

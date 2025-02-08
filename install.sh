@@ -22,6 +22,6 @@ echo "Dando permissão de execução..."
 chmod +x $BIN
 
 echo "Movendo para /usr/local/bin/..."
-sudo mv $BIN /usr/local/bin/$BIN
+mv $BIN /usr/local/bin/$BIN
 
 echo "Instalação concluída! Agora você pode executar '$BIN' de qualquer lugar."

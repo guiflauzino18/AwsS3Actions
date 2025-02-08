@@ -379,18 +379,17 @@ func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3C
 func CreateS3Client(region string) (*s3.Client, ConfigGlobal, error) {
 
 	var configGlobal *ConfigGlobal
+	configGlobal = new(ConfigGlobal)
 
 	// Recupera a chave de criptografia
 	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
 	if err != nil {
-		fmt.Printf("Execute 'aws-s3-actions configure' para definir as configurações padrão.\n", err)
 		return nil, *configGlobal, err
 	}
 
 	// REcupera o arquivo com os dados
 	configGlobal, err = LoadCredentials("conf/config_global.enc", key)
 	if err != nil {
-		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		return nil, *configGlobal, err
 	}
 
