@@ -1,8 +1,8 @@
 {
-  "nome": "teste",
+  "nome": "traefik",
   "region": "us-east-2",
   "bucket": "s3.gregorian",
   "source_folder": "/home/guilherme/traefik",
-  "s3_prefix": "Backup/Teste/Traefik/",
+  "s3_prefix": "Backup/S3Actions/",
   "arn_assume_role": ""
 }

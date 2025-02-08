@@ -93,7 +93,7 @@ func BackupConfigure(c *cli.Context) {
 	scanner.Scan()
 	config.SourceFolder = scanner.Text()
 
-	fmt.Print("Prefixo no S3 (ex: backups/): ")
+	fmt.Print("Prefixo no S3 (ex: Backups/): ")
 	scanner.Scan()
 	config.S3Prefix = scanner.Text()
 

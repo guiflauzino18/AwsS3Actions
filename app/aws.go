@@ -3,8 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -19,94 +17,41 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/urfave/cli"
 )
 
-func BackupRun(c *cli.Context) {
-	// lê arquivo json de perfil de backup
-	file, err := os.Open("profile/" + c.String("profile") + ".json")
-	if err != nil {
-		log.Fatal("Erro ao ler o arquivo de perfil de backup.")
-	}
-	defer file.Close()
+// Interfaces do s3 Client. Facilita testes unitários
+type S3Uploader interface {
+	CreateMultipartUpload(ctx context.Context, input *s3.CreateMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
+	UploadPart(ctx context.Context, input *s3.UploadPartInput, opts ...func(*s3.Options)) (*s3.UploadPartOutput, error)
+	CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput, opts ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
+	AbortMultipartUpload(ctx context.Context, input *s3.AbortMultipartUploadInput, opts ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
+	PutObject(ctx context.Context, input *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
 
-	// Cria um struct de configBackup com os dados do json
-	var configBackup ConfigBackup
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&configBackup); err != nil {
-		log.Fatalf("Erro ao ler Perfil de Backup:\n%v", err)
-	}
-
-	// Recupera s3Client
-	s3Client, _, err := CreateS3Client(configBackup.Region)
-	if err != nil {
-		log.Fatalf("Erro ao criar s3Client: %v", err)
-	}
-
-	// Criando um canal para distribuir os arquivos
-	fileCh := make(chan string)
-	numWorkers := 10 // Define o número de workers
-	var wg sync.WaitGroup
-
-	// Inicia os workers antes de enviar os arquivos para o canal
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go workerPool(fileCh, &wg, &configBackup, *s3Client)
-	}
-
-	fmt.Println("Adicionando arquivos para envio...")
-	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
-
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-
-		//envia o arquivo atual para o canal
-		fileCh <- path
-
-		return nil
-
-	})
-	if err != nil {
-		log.Fatalf("Erro ao fazer backup: %v", err)
-	}
-
-	close(fileCh) // Fecha o canal após adicionar os arquivos
-
-	wg.Wait()
+type s3Downloader interface {
+	GetObject(ctx context.Context, input *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	ListObjectsV2(ctx context.Context, input *s3.ListObjectsV2Input, opts ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	ListObjectVersions(ctx context.Context, input *s3.ListObjectVersionsInput, opts ...func(*s3.Options)) (*s3.ListObjectVersionsOutput, error)
 }
 
 // Workerpool para envio dos arquivos
-func workerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup, s3Client s3.Client) {
-	defer wg.Done()
-	errCh := make(chan error, 5) // Canal de erros
+func WorkerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup, s3Client s3.Client) {
 
 	go func() {
 		defer wg.Done()
 		for file := range fileCh { // Cada worker processa arquivos do canal
 
-			uploadObjetct(file, *configBackup, s3Client, errCh)
+			uploadObjetct(file, *configBackup, s3Client)
 		}
 	}()
 
-	wg.Wait() // Aguarda todos os uploads terminarem
-	defer close(errCh)
-
-	// Exibindo erros, se houver
-	for err := range errCh {
-		log.Println("❌ Erro:", err)
-	}
-
-	fmt.Println("===========================================================================")
-	fmt.Println("Envios dos arquivo concluídos!")
-	fmt.Println("===========================================================================")
 }
 
 // FAz upload de objetos usando concorrencias
-func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client, errCh chan error) error {
+func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
+
+	errCh := make(chan error, 5) // Canal de erros
+	defer close(errCh)
 
 	realPath, err := filepath.Rel(configBackup.SourceFolder, path)
 	if err != nil {
@@ -129,44 +74,41 @@ func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client, e
 
 	// Decide o método de upload
 	if fileSize < 10*1024*1024 { // < 10 MB
-		uploadSingle(file, &s3Client, configBackup, s3Key, errCh)
+		UploadSingle(file, &s3Client, configBackup, s3Key, errCh)
 	} else {
 		UploadMultipart(file, fileSize, &s3Client, configBackup, s3Key, errCh)
 	}
 
-	return nil
+	// Exibindo erros, se houver
+	go func() {
+
+		for err := range errCh {
+			log.Println("❌ Erro:", err)
+		}
+	}()
 }
 
 // Upload normal para arquivos pequenos
-func uploadSingle(file *os.File, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
+func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, errCh chan error) {
 
-	// Calcula o hash MD5 localmente
-	hash := md5.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		errCh <- fmt.Errorf("Erro ao cacular o MD5 do arquivo %s", file)
-	}
-
-	localMD5 := fmt.Sprintf("\"%x\"", hash.Sum(nil))
-
-	result, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
+	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket: &configBackup.Bucket,
 		Key:    &s3Key,
 		Body:   file,
 	})
+
 	if err != nil {
 		errCh <- fmt.Errorf("❌ Erro no upload do arquivo: (%s): %v", s3Key, err)
+		return
 	} else {
-		// Verifica a integridade do upload
-		if result.ETag != &localMD5 {
-			errCh <- fmt.Errorf("Erro de integridade: Etag do S3 (%s) diferente do MD5 local (%s) para o arquivo %s", *result.ETag, localMD5, file)
-		}
+
 		fmt.Printf("✅ Arquivo %s enviado para %s\n", s3Key, configBackup.Bucket)
 	}
 
 }
 
 // Multipart Upload para arquivos grandes
-func UploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configBackup ConfigBackup, s3Key string, errCh chan error) {
+func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, errCh chan error) {
 	//Inicia o Multipart Upload
 	resp, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
 		Bucket: &configBackup.Bucket,
@@ -199,7 +141,8 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 		for uploaded := range progressChan {
 			totalUploaded += uploaded
 			percentage := float64(totalUploaded) / float64(fileSize) * 100
-			fmt.Printf("\r🚀 Progresso: %.2f%%", percentage)
+
+			fmt.Printf("\r🚀%s\nProgresso: %.2f%%\n", s3Key, percentage)
 		}
 	}()
 
@@ -252,6 +195,7 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 				}
 
 				// Cada parte enviada atualiza o progresso
+
 				progressChan <- int64(n)
 
 				if err == nil {
@@ -312,7 +256,7 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client *s3.Client, configB
 }
 
 // Aborta Multipart Upload em caso de erro
-func abortMultipartUpload(s3Client *s3.Client, configBackup ConfigBackup, s3Key, uploadID string) {
+func abortMultipartUpload(s3Client S3Uploader, configBackup ConfigBackup, s3Key, uploadID string) {
 	_, _ = s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
 		Bucket:   &configBackup.Bucket,
 		Key:      &s3Key,
@@ -322,7 +266,7 @@ func abortMultipartUpload(s3Client *s3.Client, configBackup ConfigBackup, s3Key,
 }
 
 // Função para download de objetos
-func downloadObject(configGlobal *ConfigGlobal, s3Client s3.Client, bucket, prefix, version, local, region string) error {
+func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, prefix, version, local, region string) error {
 
 	nomeArquivo := strings.Split(prefix, "/")
 	fmt.Println("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
@@ -392,7 +336,7 @@ func downloadObject(configGlobal *ConfigGlobal, s3Client s3.Client, bucket, pref
 
 }
 
-func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3Client s3.Client) {
+func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3Client s3Downloader) {
 
 	input := &s3.ListObjectsV2Input{
 		Bucket:    &bucket,

@@ -6,12 +6,17 @@ package app
 */
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/urfave/cli"
 )
 
+// Menu do terminal
 func Run() *cli.App {
 	app := cli.NewApp()
 	app.Name = "AWS S3 ACTIONS"
@@ -67,7 +72,7 @@ func Run() *cli.App {
 							Required: true,
 						},
 					},
-					Action: BackupRun,
+					Action: backupRun,
 				},
 			},
 		},
@@ -133,7 +138,7 @@ func ListObjectsCommand(c *cli.Context) {
 		delimiter = "/"
 	}
 
-	ListObjects(bucket, region, prefix, delimiter, showVersion, *s3Client)
+	ListObjects(bucket, region, prefix, delimiter, showVersion, s3Client)
 }
 
 // Restore de objetos
@@ -155,9 +160,71 @@ func RestoreObject(c *cli.Context) {
 		bucket = configGlobal.Bucket
 	}
 
-	err = downloadObject(&configGlobal, *s3Client, bucket, prefix, version, local, region)
+	err = DownloadObject(&configGlobal, s3Client, bucket, prefix, version, local, region)
 	if err != nil {
 		fmt.Printf("Erro no Download do Arquivo:\n %v", err)
 	}
 
+}
+
+// Upload de Objetos
+func backupRun(c *cli.Context) {
+	// lê arquivo json de perfil de backup
+	file, err := os.Open("profile/" + c.String("profile") + ".json")
+	if err != nil {
+		log.Fatal("Erro ao ler o arquivo de perfil de backup.\n Execute backup configure para configurar.")
+	}
+	defer file.Close()
+
+	// Cria um struct de configBackup com os dados do json
+	var configBackup ConfigBackup
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&configBackup); err != nil {
+		log.Fatalf("Erro ao ler Perfil de Backup:\n%v", err)
+	}
+
+	// Recupera s3Client
+	s3Client, _, err := CreateS3Client(configBackup.Region)
+	if err != nil {
+		log.Fatalf("Erro ao criar s3Client: %v", err)
+	}
+
+	// Criando um canal para distribuir os arquivos
+	fileCh := make(chan string)
+	numWorkers := 10 // Define o número de workers
+	var wg sync.WaitGroup
+
+	// Inicia os workers antes de enviar os arquivos para o canal
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go WorkerPool(fileCh, &wg, &configBackup, *s3Client)
+	}
+
+	fmt.Println("Adicionando arquivos para envio...")
+	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
+
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		//envia o arquivo atual para o canal
+		fileCh <- path
+
+		return nil
+
+	})
+	if err != nil {
+		log.Fatalf("Erro ao fazer backup: %v", err)
+	}
+
+	close(fileCh) // Fecha o canal após adicionar os arquivos
+
+	wg.Wait()
+
+	fmt.Println("===========================================================================")
+	fmt.Println("Envios dos arquivo concluídos!")
+	fmt.Println("===========================================================================")
 }
