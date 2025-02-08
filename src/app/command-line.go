@@ -171,7 +171,7 @@ func RestoreObject(c *cli.Context) {
 // Upload de Objetos
 func backupRun(c *cli.Context) {
 	// lê arquivo json de perfil de backup
-	file, err := os.Open("profile/" + c.String("profile") + ".json")
+	file, err := os.Open("/usr/local/aws-s3-actions/profile/" + c.String("profile") + ".json")
 	if err != nil {
 		log.Fatal("Erro ao ler o arquivo de perfil de backup.\n Execute backup configure para configurar.")
 	}
