@@ -24,7 +24,7 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -o aws-s3-actions main.go
 
       - name: Criar Release no GitHub
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: src/aws-s3-actions
           token: ${{ secrets.GITHUB_TOKEN }}
