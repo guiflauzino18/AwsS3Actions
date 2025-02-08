@@ -21,12 +21,12 @@ jobs:
       - name: Compilar binário
         run: |
           mkdir -p dist
-          GOOS=linux GOARCH=amd64 go build -o dist/aws-s3-actions main.go
+          GOOS=linux GOARCH=amd64 go build -o src/aws-s3-actions main.go
 
       - name: Criar Release no GitHub
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/minha-app-linux
+          files: src/aws-s3-actions
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false
