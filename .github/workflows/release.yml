@@ -20,7 +20,7 @@ jobs:
 
       - name: Compilar binário
         run: |
-          mkdir -p dist
+          cd src/
           GOOS=linux GOARCH=amd64 go build -o src/aws-s3-actions main.go
 
       - name: Criar Release no GitHub
