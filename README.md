@@ -11,7 +11,8 @@ AWS S3 Actions tem a função de facilitar as operações de backup e restore de
 
 # Documentação
 <h3>Instalação:</h3>
-curl -s https://raw.githubusercontent.com/guiflauzino18/AwsS3Actions/refs/heads/Main/install.sh | bash
+
+`curl -s https://raw.githubusercontent.com/guiflauzino18/AwsS3Actions/refs/heads/Main/install.sh | bash`
 
 <h3>Pré Ajustes:</h3>
 
