@@ -58,3 +58,9 @@ AWS S3 Actions tem a função de facilitar as operações de backup e restore de
   * --bucket <bucket_name> - Opcional, especifica o bucket do objeto <br>
   * --version <Version_ID> - Opcional, baixa uma versão específica do objeto <br>
   * --region <regiao> - Opcional, especifica uma região <br>
+
+# Códigos de saída
+
+- Sucesso: 0
+- Erro: 1
+- Use echo $? para ver o status de saída
