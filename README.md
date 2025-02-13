@@ -51,6 +51,8 @@ AWS S3 Actions tem a função de facilitar as operações de backup e restore de
 
 - Execute `aws-s3-actions backup run --profile <meu_backup>` para executar o backup <br>
 
+- Execute `aws-s3-actions backup list` para listar backups configurados.
+
 <h3>Download de Objetos</h3>
 
 - Execute `aws-s3-actions restore --prefix <caminho_do_objeto> --local <Ex.: /root/>` para realizar o download do objeto para a pasta local.

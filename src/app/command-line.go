@@ -8,6 +8,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -73,6 +74,11 @@ func Run() *cli.App {
 						},
 					},
 					Action: backupRun,
+				},
+				{
+					Name:   "list",
+					Usage:  "Lista perfis de Backup configurados.",
+					Action: listBackup,
 				},
 			},
 		},
@@ -230,4 +236,59 @@ func backupRun(c *cli.Context) {
 	fmt.Println("===========================================================================")
 	fmt.Println("Envios dos arquivo concluídos!")
 	fmt.Println("===========================================================================")
+}
+
+// Lista Backups Configurados
+func listBackup(c *cli.Context) {
+	type BackupProfile struct {
+		Nome         string `json:"nome"`
+		Region       string `json:"region"`
+		Bucket       string `json:"bucket"`
+		SourceFolder string `json:"source_folder"`
+		S3Prefix     string `json:"s3_prefix"`
+	}
+
+	profileDir := "/usr/local/aws-s3-actions/profile/"
+
+	var backupProfiles []BackupProfile
+
+	err := filepath.WalkDir(profileDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("Erro ao abrir o arquivo %s", file.Name())
+		}
+		defer file.Close()
+
+		var backupProfile BackupProfile
+		decoder := json.NewDecoder(file)
+		if err := decoder.Decode(&backupProfile); err != nil {
+			return fmt.Errorf("Erro ao decodificar json do arquivo %s: \n%v", path, err)
+		}
+
+		backupProfiles = append(backupProfiles, backupProfile)
+
+		return nil
+
+	})
+
+	if err != nil {
+		log.Fatalf("Erro ao listar backups: \n%v", err)
+	}
+
+	fmt.Println("\nPerfis de backup:\n")
+	for _, profile := range backupProfiles {
+		fmt.Printf("Nome: %s\nBucket: %s\nRegião: %s\nPasta de Origem: %s\nPrefixo de Destino: %s\n=============================================================\n",
+			profile.Nome, profile.Bucket, profile.Region, profile.SourceFolder, profile.S3Prefix)
+	}
+
+	fmt.Printf("\nPara editar um perfil, edite o arquivo json em %s\n", profileDir)
+
 }
