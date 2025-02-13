@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -72,13 +73,46 @@ func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
 	fileInfo, _ := file.Stat()
 	fileSize := fileInfo.Size()
 
-	// Decide o método de upload
-	if fileSize < 10*1024*1024 { // < 10 MB
-		UploadSingle(file, &s3Client, configBackup, s3Key, errCh)
+	// Verifica se arquivo foi modificado para então enviar
+	// Pega hash do arquivo local
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		errCh <- err
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	// Hash do objeto no S3
+	var hashS3 string
+	resp, err := s3Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
+		Bucket: &configBackup.Bucket,
+		Key:    &s3Key,
+	})
+
+	if err != nil {
+		//Se houve erros é pq o objeto ainda não existe no Bucket
+		hashS3 = "-"
 	} else {
-		UploadMultipart(file, fileSize, &s3Client, configBackup, s3Key, errCh)
+		hashS3 = strings.Trim(resp.Metadata["x-amz-meta-sha256"], `"`)
 	}
 
+	if hashLocal == hashS3 {
+
+		fmt.Printf("%s: Arquivos com mesmo Hash. Não houve modificação, portanto não será enviado.\n", fileInfo.Name())
+
+	} else {
+
+		metadata := map[string]string{
+			"x-amz-meta-sha256": hashLocal,
+		}
+
+		// Decide o método de upload
+		if fileSize < 10*1024*1024 { // < 10 MB
+			UploadSingle(file, &s3Client, configBackup, s3Key, metadata, errCh)
+		} else {
+			UploadMultipart(file, fileSize, &s3Client, configBackup, s3Key, metadata, errCh)
+		}
+
+	}
 	// Exibindo erros, se houver
 	go func() {
 
@@ -89,12 +123,13 @@ func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
 }
 
 // Upload normal para arquivos pequenos
-func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, errCh chan error) {
+func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error) {
 
 	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
-		Bucket: &configBackup.Bucket,
-		Key:    &s3Key,
-		Body:   file,
+		Bucket:   &configBackup.Bucket,
+		Key:      &s3Key,
+		Body:     file,
+		Metadata: metadata,
 	})
 
 	if err != nil {
@@ -108,11 +143,12 @@ func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup,
 }
 
 // Multipart Upload para arquivos grandes
-func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, errCh chan error) {
+func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error) {
 	//Inicia o Multipart Upload
 	resp, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
-		Bucket: &configBackup.Bucket,
-		Key:    &s3Key,
+		Bucket:   &configBackup.Bucket,
+		Key:      &s3Key,
+		Metadata: metadata,
 	})
 	if err != nil {
 		errCh <- fmt.Errorf("Erro ao iniciar Multipart Upload: %v", err)
@@ -382,13 +418,13 @@ func CreateS3Client(region string) (*s3.Client, ConfigGlobal, error) {
 	configGlobal = new(ConfigGlobal)
 
 	// Recupera a chave de criptografia
-	key, err := os.ReadFile(os.ExpandEnv("conf/.aws_key"))
+	key, err := os.ReadFile(os.ExpandEnv("/usr/local/aws-s3-actions/conf/.aws_key"))
 	if err != nil {
 		return nil, *configGlobal, err
 	}
 
 	// REcupera o arquivo com os dados
-	configGlobal, err = LoadCredentials("conf/config_global.enc", key)
+	configGlobal, err = LoadCredentials("/usr/local/aws-s3-actions/conf/config_global.enc", key)
 	if err != nil {
 		return nil, *configGlobal, err
 	}

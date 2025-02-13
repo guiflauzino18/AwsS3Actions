@@ -4,8 +4,10 @@ import (
 	"aws-s3-actions/app"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"testing"
@@ -68,6 +70,16 @@ func TestUploadSingle_Success(t *testing.T) {
 	assert.NoError(t, err)
 	defer file.Close()
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		assert.NoError(t, err)
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	metadata := map[string]string{
+		"x-amz-meta-sha256": hashLocal,
+	}
+
 	// Configura mock
 	mocks3Client := new(Mocks3Client)
 	configBackup := app.ConfigBackup{Bucket: "bucket-test"}
@@ -82,7 +94,7 @@ func TestUploadSingle_Success(t *testing.T) {
 	errChan := make(chan error, 1)
 	defer close(errChan)
 
-	app.UploadSingle(file, mocks3Client, configBackup, s3Key, errChan)
+	app.UploadSingle(file, mocks3Client, configBackup, s3Key, metadata, errChan)
 
 	select {
 	case err := <-errChan:
@@ -113,6 +125,16 @@ func TestUploadSingle_Failure(t *testing.T) {
 	assert.NoError(t, err)
 	defer file.Close()
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		assert.NoError(t, err)
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	metadata := map[string]string{
+		"x-amz-meta-sha256": hashLocal,
+	}
+
 	mockS3 := new(Mocks3Client)
 	configBackup := app.ConfigBackup{Bucket: "bucket-test"}
 	s3Key := "key-test"
@@ -123,7 +145,7 @@ func TestUploadSingle_Failure(t *testing.T) {
 	errChan := make(chan error, 1)
 
 	// Executa o upload
-	app.UploadSingle(file, mockS3, configBackup, s3Key, errChan)
+	app.UploadSingle(file, mockS3, configBackup, s3Key, metadata, errChan)
 
 	// Verifica se um erro foi enviado ao canal
 	select {
@@ -147,6 +169,16 @@ func TestUploadMultipart_Success(t *testing.T) {
 	file.Close()
 	file, _ = os.Open(file.Name())
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		assert.NoError(t, err)
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	metadata := map[string]string{
+		"x-amz-meta-sha256": hashLocal,
+	}
+
 	// Mock do S3
 	mockS3 := new(Mocks3Client)
 	configBackup := app.ConfigBackup{Bucket: "bucket-test"}
@@ -163,7 +195,7 @@ func TestUploadMultipart_Success(t *testing.T) {
 	errChan := make(chan error, 2)
 
 	// Executa o upload
-	app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, errChan)
+	app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, metadata, errChan)
 
 	// Verifica se o upload foi bem-sucedido
 	select {
@@ -186,6 +218,16 @@ func TestUploadMultipart_FailCreateUpload(t *testing.T) {
 	s3Key := "key-test"
 	fileSize := int64(15 * 1024 * 1024)
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		assert.NoError(t, err)
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	metadata := map[string]string{
+		"x-amz-meta-sha256": hashLocal,
+	}
+
 	// Simula falha ao iniciar o Multipart Upload
 	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything).Return((*s3.CreateMultipartUploadOutput)(nil), errors.New("erro ao criar upload"))
 
@@ -195,7 +237,7 @@ func TestUploadMultipart_FailCreateUpload(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, errChan)
+		app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, metadata, errChan)
 	}()
 	wg.Wait()
 
@@ -216,6 +258,16 @@ func TestUploadMultipart_FailUploadPart(t *testing.T) {
 	s3Key := "key-test"
 	fileSize := int64(15 * 1024 * 1024)
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		assert.NoError(t, err)
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	metadata := map[string]string{
+		"x-amz-meta-sha256": hashLocal,
+	}
+
 	// Simula sucesso ao iniciar o Multipart Upload
 	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything).Return(&s3.CreateMultipartUploadOutput{UploadId: aws.String("upload-123")}, nil)
 
@@ -231,7 +283,7 @@ func TestUploadMultipart_FailUploadPart(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, errChan)
+		app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, metadata, errChan)
 	}()
 	wg.Wait()
 
@@ -254,6 +306,16 @@ func TestUploadMultipart_FailCompleteUpload(t *testing.T) {
 	s3Key := "key-test"
 	fileSize := int64(15 * 1024 * 1024)
 
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		assert.NoError(t, err)
+	}
+	hashLocal := fmt.Sprintf("%x", hash.Sum(nil))
+
+	metadata := map[string]string{
+		"x-amz-meta-sha256": hashLocal,
+	}
+
 	mockS3.On("CreateMultipartUpload", mock.Anything, mock.Anything).Return(&s3.CreateMultipartUploadOutput{UploadId: aws.String("upload-123")}, nil)
 
 	mockS3.On("UploadPart", mock.Anything, mock.Anything).Return(&s3.UploadPartOutput{ETag: aws.String("etag-part")}, nil).Times(2)
@@ -270,7 +332,7 @@ func TestUploadMultipart_FailCompleteUpload(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, errChan)
+		app.UploadMultipart(file, fileSize, mockS3, configBackup, s3Key, metadata, errChan)
 	}()
 	wg.Wait()
 
