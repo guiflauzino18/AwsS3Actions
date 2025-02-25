@@ -125,6 +125,7 @@ func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
 // Upload normal para arquivos pequenos
 func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error) {
 
+	file.Seek(0, 0)
 	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket:   &configBackup.Bucket,
 		Key:      &s3Key,
@@ -203,7 +204,7 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configB
 
 				// Garante que cada parte leia do offset correto
 				mu.Lock()
-				_, err := file.Seek(offset, io.SeekStart)
+				_, err := file.Seek(offset, io.SeekStart) //move ponteiro para partes corretas no arquivo
 				if err != nil {
 					mu.Unlock()
 					errChan <- fmt.Errorf("Erro ao buscar parte %d: %v", partNumber, err)
@@ -304,71 +305,161 @@ func abortMultipartUpload(s3Client S3Uploader, configBackup ConfigBackup, s3Key,
 // Função para download de objetos
 func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, prefix, version, local, region string) error {
 
-	nomeArquivo := strings.Split(prefix, "/")
-	fmt.Println("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
+	//Se for passado * no prefix significa que é pra baixar todos os arquivos dentro de uma pasta
+	if strings.Contains(prefix, "*") {
+		prefix = strings.ReplaceAll(prefix, "*", "")
+		delimiter := ""
 
-	file, err := os.Create(local + "/" + nomeArquivo[len(nomeArquivo)-1])
-	if err != nil {
-		return fmt.Errorf("Erro ao criar arquivo local: %v", err)
-	}
-	defer file.Close()
-
-	// Cria input e caso a versão seja especificada é passada na requisição.
-	input := &s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    &prefix,
-	}
-	if version != "" {
-		input.VersionId = &version
-	}
-
-	// Se region não for especificado pega da conf padrao
-	if region == "" {
-		region = configGlobal.Region
-	}
-
-	resp, err := s3Client.GetObject(context.TODO(), input)
-	if err != nil {
-		return fmt.Errorf("Erro ao baixar arquivo do S3: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// Progresso do download
-	totalSize := resp.ContentLength
-	progressChan := make(chan int64)
-
-	go func() {
-		totalBaixado := int64(0)
-		for baixado := range progressChan {
-			totalBaixado += baixado
-			porcent := float64(totalBaixado) / float64(*totalSize) * 100
-			fmt.Printf("\r Progresso: %.2f%%", porcent)
-		}
-	}()
-
-	buf := make([]byte, 1024*1024)
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			if _, err := file.Write(buf[:n]); err != nil {
-				return fmt.Errorf("Erro ao escrever no arquivo local: %v", err)
-			}
-			progressChan <- int64(n)
-		}
-		if err == io.EOF {
-			break
+		listInput := &s3.ListObjectsV2Input{
+			Bucket:    &bucket,
+			Prefix:    &prefix,
+			Delimiter: &delimiter,
 		}
 
+		resultList, err := s3Client.ListObjectsV2(context.TODO(), listInput)
 		if err != nil {
-			return fmt.Errorf("Erro ao ler dados do Bucket: %v", err)
+			log.Fatalf("Erro ao listar conteúdo da pasta:\n%v", err)
 		}
 
+		objetos := resultList.Contents
+
+		fmt.Printf("Iniciando download de %d arquivos...\n", len(objetos))
+
+		for _, objeto := range objetos {
+
+			pastas := strings.Split(*objeto.Key, "/") //cria um slice com as pastas
+			pastaRecursiva := local                   //pastaRecursiva será o caminho completo de pastas
+
+			//Percorre array de pastas para criar caminho completo -1 para remover nome do arquivo
+			for i := 0; i < len(pastas)-1; i++ {
+				pastaRecursiva += "/" + pastas[i]
+			}
+
+			fmt.Printf("Criando pastas %s\n", pastaRecursiva)
+			if err := os.MkdirAll(pastaRecursiva, os.ModePerm); err != nil {
+				log.Fatalf("Erro ao criar pasta %s:\n%v", pastaRecursiva, err)
+			}
+
+			file, err := os.Create(pastaRecursiva + "/" + pastas[len(pastas)-1])
+			if err != nil {
+				log.Fatalf("Erro criando arquivo local\n", err.Error())
+			}
+
+			defer file.Close()
+
+			fmt.Printf("Baixando arquivo %s...\n", *objeto.Key)
+			input := &s3.GetObjectInput{
+				Bucket: &bucket,
+				Key:    objeto.Key,
+			}
+
+			resp, err := s3Client.GetObject(context.TODO(), input)
+			if err != nil {
+				fmt.Errorf("Erro no donwload do arquivo %s: %v", *objeto.Key, err)
+			}
+
+			defer resp.Body.Close()
+
+			// Progresso do download
+			totalSize := resp.ContentLength
+			progressChan := make(chan int64)
+
+			go func() {
+				totalBaixado := int64(0)
+				for baixado := range progressChan {
+					totalBaixado += baixado
+					porcent := float64(totalBaixado) / float64(*totalSize) * 100
+					fmt.Printf("\r Progresso: %.2f%%", porcent)
+				}
+			}()
+
+			//Escreve dados no arquivo
+			buf := make([]byte, 1024*1024)
+			for {
+				n, err := resp.Body.Read(buf)
+				if n > 0 {
+					if _, err := file.Write(buf[:n]); err != nil {
+						return fmt.Errorf("Erro ao escrever no arquivo local: %v", err)
+					}
+					progressChan <- int64(n)
+				}
+				if err == io.EOF {
+					break
+				}
+
+				if err != nil {
+					return fmt.Errorf("Erro ao ler dados do Bucket: %v", err)
+				}
+
+			}
+		}
+
+		return nil
+
+	} else { //Senão faz o processo de download de somente um arquivo
+
+		nomeArquivo := strings.Split(prefix, "/")
+		fmt.Println("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
+
+		file, err := os.Create(local + "/" + nomeArquivo[len(nomeArquivo)-1])
+		if err != nil {
+			return fmt.Errorf("Erro ao criar arquivo local: %v", err)
+		}
+		defer file.Close()
+
+		// Cria input e caso a versão seja especificada é passada na requisição.
+		input := &s3.GetObjectInput{
+			Bucket: &bucket,
+			Key:    &prefix,
+		}
+		if version != "" {
+			input.VersionId = &version
+		}
+
+		resp, err := s3Client.GetObject(context.TODO(), input)
+		if err != nil {
+			return fmt.Errorf("Erro ao baixar arquivo do S3: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Progresso do download
+		totalSize := resp.ContentLength
+		progressChan := make(chan int64)
+
+		go func() {
+			totalBaixado := int64(0)
+			for baixado := range progressChan {
+				totalBaixado += baixado
+				porcent := float64(totalBaixado) / float64(*totalSize) * 100
+				fmt.Printf("\r Progresso: %.2f%%", porcent)
+			}
+		}()
+
+		buf := make([]byte, 1024*1024)
+		for {
+			n, err := resp.Body.Read(buf)
+			if n > 0 {
+				if _, err := file.Write(buf[:n]); err != nil {
+					return fmt.Errorf("Erro ao escrever no arquivo local: %v", err)
+				}
+				progressChan <- int64(n)
+			}
+			if err == io.EOF {
+				break
+			}
+
+			if err != nil {
+				return fmt.Errorf("Erro ao ler dados do Bucket: %v", err)
+			}
+
+		}
+		close(progressChan)
+
+		fmt.Printf("\n✅ Download concluído: %s\n", local+nomeArquivo[len(nomeArquivo)-1])
+
+		return nil
+
 	}
-	close(progressChan)
-
-	fmt.Printf("\n✅ Download concluído: %s\n", local+nomeArquivo[len(nomeArquivo)-1])
-
-	return nil
 
 }
 

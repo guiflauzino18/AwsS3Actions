@@ -30,4 +30,4 @@ mv $BIN /usr/local/$BIN/$BIN
 echo "Criando link em bin"
 ln -s /usr/local/$BIN/$BIN /usr/local/bin/$BIN
 
-echo "Instalação concluída! Agora você pode executar '$BIN' de qualquer lugar."
+echo "Instalação concluída! Agora você pode executar '$BIN'."
