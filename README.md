@@ -61,6 +61,8 @@ AWS S3 Actions tem a função de facilitar as operações de backup e restore de
   * --version <Version_ID> - Opcional, baixa uma versão específica do objeto <br>
   * --region <regiao> - Opcional, especifica uma região <br>
 
+- Para download completo de uma pasta adicione `--prefix <caminho>/* --local /root/` 
+
 # Códigos de saída
 
 - Sucesso: 0
