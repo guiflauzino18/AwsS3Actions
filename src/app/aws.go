@@ -204,7 +204,7 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configB
 
 				// Garante que cada parte leia do offset correto
 				mu.Lock()
-				_, err := file.Seek(offset, io.SeekStart)
+				_, err := file.Seek(offset, io.SeekStart) //move ponteiro para partes corretas no arquivo
 				if err != nil {
 					mu.Unlock()
 					errChan <- fmt.Errorf("Erro ao buscar parte %d: %v", partNumber, err)
