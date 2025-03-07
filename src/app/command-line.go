@@ -22,7 +22,7 @@ func Run() *cli.App {
 	app := cli.NewApp()
 	app.Name = "AWS S3 ACTIONS"
 	app.Usage = "Facilitando operações no S3 da Amazon"
-	app.Version = "v1.1.15"
+	app.Version = "v1.1.17"
 
 	app.Commands = []cli.Command{
 		{
