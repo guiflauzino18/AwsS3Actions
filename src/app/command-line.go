@@ -126,9 +126,17 @@ func ListObjectsCommand(c *cli.Context) {
 	showVersion := c.Bool("show-version")
 	var delimiter string
 
+	//Cria logger para este perfil de backup
+	logger, logFile, erro := ConfiguraLogger(LogGlobal)
+	if erro != nil {
+		log.Fatalf("Erro ao criar arquivo de log: %v", erro)
+	}
+	defer logFile.Close()
+
 	s3Client, configGlobal, err := CreateS3Client(region)
 	if err != nil {
 		log.Fatal("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
+		logger.Error("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 	}
 
 	// Preenche bucket e region com valor padrão se não definido
@@ -144,7 +152,7 @@ func ListObjectsCommand(c *cli.Context) {
 		delimiter = "/"
 	}
 
-	ListObjects(bucket, region, prefix, delimiter, showVersion, s3Client)
+	ListObjects(bucket, region, prefix, delimiter, showVersion, s3Client, logger)
 }
 
 // Restore de objetos
@@ -156,9 +164,17 @@ func RestoreObject(c *cli.Context) {
 	local := c.String("local")
 	region := c.String("region")
 
+	//Cria logger para este perfil de backup
+	logger, logFile, erro := ConfiguraLogger(LogGlobal)
+	if erro != nil {
+		log.Fatalf("Erro ao criar arquivo de log: %v", erro)
+	}
+	defer logFile.Close()
+
 	s3Client, configGlobal, err := CreateS3Client(region)
 	if err != nil {
 		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
+		logger.Info("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		log.Fatal(err.Error())
 	}
 
@@ -167,18 +183,27 @@ func RestoreObject(c *cli.Context) {
 		bucket = configGlobal.Bucket
 	}
 
-	err = DownloadObject(&configGlobal, s3Client, bucket, prefix, version, local, region)
+	err = DownloadObject(&configGlobal, s3Client, bucket, prefix, version, local, region, logger)
 	if err != nil {
 		fmt.Printf("Erro no Download do Arquivo:\n %v", err)
+		logger.Infof("Erro no Download do Arquivo:\n %v", err)
 	}
 
 }
 
 // Upload de Objetos
 func backupRun(c *cli.Context) {
+	//Cria logger para este perfil de backup
+	logger, logFile, erro := ConfiguraLogger(c.String("profile"))
+	if erro != nil {
+		log.Fatalf("Erro ao criar arquivo de log: %v", erro)
+	}
+	defer logFile.Close()
+
 	// lê arquivo json de perfil de backup
 	file, err := os.Open("/usr/local/aws-s3-actions/profile/" + c.String("profile") + ".json")
 	if err != nil {
+		logger.Error("Erro ao ler o arquivo de perfil de backup.\n Execute backup configure para configurar.")
 		log.Fatal("Erro ao ler o arquivo de perfil de backup.\n Execute backup configure para configurar.")
 	}
 	defer file.Close()
@@ -187,12 +212,15 @@ func backupRun(c *cli.Context) {
 	var configBackup ConfigBackup
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&configBackup); err != nil {
+
+		logger.Errorf("Erro ao ler Perfil de Backup:\n%v", err)
 		log.Fatalf("Erro ao ler Perfil de Backup:\n%v", err)
 	}
 
 	// Recupera s3Client
 	s3Client, _, err := CreateS3Client(configBackup.Region)
 	if err != nil {
+		logger.Error("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		fmt.Println("Execute 'aws-s3-actions configure' para definir as configurações padrão.")
 		log.Fatal(err)
 	}
@@ -205,9 +233,10 @@ func backupRun(c *cli.Context) {
 	// Inicia os workers antes de enviar os arquivos para o canal
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go WorkerPool(fileCh, &wg, &configBackup, *s3Client)
+		go WorkerPool(fileCh, &wg, &configBackup, *s3Client, logger)
 	}
 
+	logger.Info("Adicionando arquivos para envio...")
 	fmt.Println("Adicionando arquivos para envio...")
 	err = filepath.Walk(configBackup.SourceFolder, func(path string, info os.FileInfo, err error) error {
 
@@ -225,12 +254,17 @@ func backupRun(c *cli.Context) {
 
 	})
 	if err != nil {
+		logger.Errorf("Erro ao fazer backup: %v", err)
 		log.Fatalf("Erro ao fazer backup: %v", err)
 	}
 
 	close(fileCh) // Fecha o canal após adicionar os arquivos
 
 	wg.Wait()
+
+	logger.Info("===========================================================================")
+	logger.Info("Envios dos arquivo concluídos!")
+	logger.Info("===========================================================================")
 
 	fmt.Println("===========================================================================")
 	fmt.Println("Envios dos arquivo concluídos!")
@@ -251,6 +285,13 @@ func listBackup(c *cli.Context) {
 
 	var backupProfiles []BackupProfile
 
+	//Cria logger para este perfil de backup
+	logger, logFile, erro := ConfiguraLogger(LogGlobal)
+	if erro != nil {
+		log.Fatalf("Erro ao criar arquivo de log: %v", erro)
+	}
+	defer logFile.Close()
+
 	err := filepath.WalkDir(profileDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -262,6 +303,7 @@ func listBackup(c *cli.Context) {
 
 		file, err := os.Open(path)
 		if err != nil {
+			logger.Errorf("Erro ao abrir o arquivo %s", file.Name())
 			return fmt.Errorf("Erro ao abrir o arquivo %s", file.Name())
 		}
 		defer file.Close()
@@ -269,6 +311,7 @@ func listBackup(c *cli.Context) {
 		var backupProfile BackupProfile
 		decoder := json.NewDecoder(file)
 		if err := decoder.Decode(&backupProfile); err != nil {
+			logger.Errorf("Erro ao decodificar json do arquivo %s: \n%v", path, err)
 			return fmt.Errorf("Erro ao decodificar json do arquivo %s: \n%v", path, err)
 		}
 
@@ -279,6 +322,7 @@ func listBackup(c *cli.Context) {
 	})
 
 	if err != nil {
+		logger.Errorf("Erro ao listar backups: \n%v", err)
 		log.Fatalf("Erro ao listar backups: \n%v", err)
 	}
 

@@ -97,16 +97,25 @@ func BackupConfigure(c *cli.Context) {
 	scanner.Scan()
 	config.S3Prefix = scanner.Text()
 
+	//Cria logger para este perfil de backup
+	logger, logFile, erro := ConfiguraLogger(LogGlobal)
+	if erro != nil {
+		log.Fatalf("Erro ao criar arquivo de log: %v", erro)
+	}
+	defer logFile.Close()
+
 	// Verifica se a pasta profile existe e cria caso não existir
 	if _, err := os.Stat("/usr/local/aws-s3-actions/profile/"); os.IsNotExist(err) {
 		err = os.MkdirAll("/usr/local/aws-s3-actions/profile", os.ModePerm)
 		if err != nil {
+			logger.Error("Erro ao criar a pasta profile.")
 			fmt.Println("Erro ao criar a pasta profile.")
 		}
 	}
 
 	file, err := os.Create("/usr/local/aws-s3-actions/profile/" + config.Nome + ".json")
 	if err != nil {
+		logger.Errorf("Erro ao criar arquivo: %v", err)
 		log.Fatalf("Erro ao criar arquivo: %v", err)
 	}
 	defer file.Close()
@@ -115,8 +124,11 @@ func BackupConfigure(c *cli.Context) {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(config); err != nil {
+
+		logger.Errorf("Erro ao escrever no arquivo: %v", err)
 		log.Fatalf("Erro ao escrever no arquivo: %v", err)
 	}
 
+	logger.Info("Perfil de Backup salvo com Sucesso!")
 	fmt.Println("Perfil de Backup salvo com Sucesso!")
 }
