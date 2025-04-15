@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/sirupsen/logrus"
 )
 
 // Interfaces do s3 Client. Facilita testes unitários
@@ -36,26 +37,27 @@ type s3Downloader interface {
 }
 
 // Workerpool para envio dos arquivos
-func WorkerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup, s3Client s3.Client) {
+func WorkerPool(fileCh chan string, wg *sync.WaitGroup, configBackup *ConfigBackup, s3Client s3.Client, logger *logrus.Logger) {
 
 	go func() {
 		defer wg.Done()
 		for file := range fileCh { // Cada worker processa arquivos do canal
 
-			uploadObjetct(file, *configBackup, s3Client)
+			uploadObjetct(file, *configBackup, s3Client, logger)
 		}
 	}()
 
 }
 
 // FAz upload de objetos usando concorrencias
-func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
+func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client, logger *logrus.Logger) {
 
 	errCh := make(chan error, 5) // Canal de erros
 	defer close(errCh)
 
 	realPath, err := filepath.Rel(configBackup.SourceFolder, path)
 	if err != nil {
+
 		errCh <- fmt.Errorf("Erro ao pegar caminho completo do arquivo")
 	}
 
@@ -107,9 +109,9 @@ func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
 
 		// Decide o método de upload
 		if fileSize < 10*1024*1024 { // < 10 MB
-			UploadSingle(file, &s3Client, configBackup, s3Key, metadata, errCh)
+			UploadSingle(file, &s3Client, configBackup, s3Key, metadata, errCh, logger)
 		} else {
-			UploadMultipart(file, fileSize, &s3Client, configBackup, s3Key, metadata, errCh)
+			UploadMultipart(file, fileSize, &s3Client, configBackup, s3Key, metadata, errCh, logger)
 		}
 
 	}
@@ -118,12 +120,13 @@ func uploadObjetct(path string, configBackup ConfigBackup, s3Client s3.Client) {
 
 		for err := range errCh {
 			log.Println("❌ Erro:", err)
+			logger.Errorf(err.Error())
 		}
 	}()
 }
 
 // Upload normal para arquivos pequenos
-func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error) {
+func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error, logger *logrus.Logger) {
 
 	file.Seek(0, 0)
 	_, err := s3Client.PutObject(context.TODO(), &s3.PutObjectInput{
@@ -139,12 +142,13 @@ func UploadSingle(file *os.File, s3Client S3Uploader, configBackup ConfigBackup,
 	} else {
 
 		fmt.Printf("✅ Arquivo %s enviado para %s\n", s3Key, configBackup.Bucket)
+		logger.Infof(fmt.Sprintf("✅ Arquivo %s enviado para %s\n", s3Key, configBackup.Bucket))
 	}
 
 }
 
 // Multipart Upload para arquivos grandes
-func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error) {
+func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configBackup ConfigBackup, s3Key string, metadata map[string]string, errCh chan error, logger *logrus.Logger) {
 	//Inicia o Multipart Upload
 	resp, err := s3Client.CreateMultipartUpload(context.TODO(), &s3.CreateMultipartUploadInput{
 		Bucket:   &configBackup.Bucket,
@@ -264,7 +268,7 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configB
 
 	// Verifica se houve erro
 	for err := range errChan {
-		abortMultipartUpload(s3Client, configBackup, s3Key, uploadID)
+		abortMultipartUpload(s3Client, configBackup, s3Key, uploadID, logger)
 		errCh <- fmt.Errorf(err.Error())
 		return
 	}
@@ -284,26 +288,28 @@ func UploadMultipart(file *os.File, fileSize int64, s3Client S3Uploader, configB
 		},
 	})
 	if err != nil {
-		abortMultipartUpload(s3Client, configBackup, s3Key, uploadID)
+		abortMultipartUpload(s3Client, configBackup, s3Key, uploadID, logger)
 		errCh <- fmt.Errorf("Erro ao finalizar Multipart Upload: %v", err)
 		return
 	}
 
 	fmt.Printf("✅ Arquivo %s enviado para %s\n!", s3Key, configBackup.Bucket)
+	logger.Infof("✅ Arquivo %s enviado para %s\n", s3Key, configBackup.Bucket)
 }
 
 // Aborta Multipart Upload em caso de erro
-func abortMultipartUpload(s3Client S3Uploader, configBackup ConfigBackup, s3Key, uploadID string) {
+func abortMultipartUpload(s3Client S3Uploader, configBackup ConfigBackup, s3Key, uploadID string, logger *logrus.Logger) {
 	_, _ = s3Client.AbortMultipartUpload(context.TODO(), &s3.AbortMultipartUploadInput{
 		Bucket:   &configBackup.Bucket,
 		Key:      &s3Key,
 		UploadId: &uploadID,
 	})
 	fmt.Printf("❌ Multipart Upload abortado para %s\n", s3Key)
+	logger.Errorf("❌ Multipart Upload abortado para %s\n", s3Key)
 }
 
 // Função para download de objetos
-func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, prefix, version, local, region string) error {
+func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, prefix, version, local, region string, logger *logrus.Logger) error {
 
 	//Se for passado * no prefix significa que é pra baixar todos os arquivos dentro de uma pasta
 	if strings.Contains(prefix, "*") {
@@ -318,11 +324,14 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 
 		resultList, err := s3Client.ListObjectsV2(context.TODO(), listInput)
 		if err != nil {
+
+			logger.Errorf("Erro ao listar conteúdo da pasta:\n%v", err)
 			log.Fatalf("Erro ao listar conteúdo da pasta:\n%v", err)
 		}
 
 		objetos := resultList.Contents
 
+		logger.Infof("Iniciando download de %d arquivos...\n", len(objetos))
 		fmt.Printf("Iniciando download de %d arquivos...\n", len(objetos))
 
 		for _, objeto := range objetos {
@@ -337,16 +346,20 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 
 			fmt.Printf("Criando pastas %s\n", pastaRecursiva)
 			if err := os.MkdirAll(pastaRecursiva, os.ModePerm); err != nil {
+
+				logger.Errorf("Erro ao criar pasta %s:\n%v", pastaRecursiva, err)
 				log.Fatalf("Erro ao criar pasta %s:\n%v", pastaRecursiva, err)
 			}
 
 			file, err := os.Create(pastaRecursiva + "/" + pastas[len(pastas)-1])
 			if err != nil {
+				logger.Errorf("Erro criando arquivo local\n", err.Error())
 				log.Fatalf("Erro criando arquivo local\n", err.Error())
 			}
 
 			defer file.Close()
 
+			logger.Infof("Baixando arquivo %s...\n", *objeto.Key)
 			fmt.Printf("Baixando arquivo %s...\n", *objeto.Key)
 			input := &s3.GetObjectInput{
 				Bucket: &bucket,
@@ -355,6 +368,7 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 
 			resp, err := s3Client.GetObject(context.TODO(), input)
 			if err != nil {
+				logger.Errorf("Erro no donwload do arquivo %s: %v", *objeto.Key, err)
 				fmt.Errorf("Erro no donwload do arquivo %s: %v", *objeto.Key, err)
 			}
 
@@ -379,6 +393,7 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 				n, err := resp.Body.Read(buf)
 				if n > 0 {
 					if _, err := file.Write(buf[:n]); err != nil {
+
 						return fmt.Errorf("Erro ao escrever no arquivo local: %v", err)
 					}
 					progressChan <- int64(n)
@@ -399,6 +414,8 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 	} else { //Senão faz o processo de download de somente um arquivo
 
 		nomeArquivo := strings.Split(prefix, "/")
+
+		logger.Infof("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
 		fmt.Println("Fazendo download do arquivo: " + nomeArquivo[len(nomeArquivo)-1])
 
 		file, err := os.Create(local + "/" + nomeArquivo[len(nomeArquivo)-1])
@@ -455,6 +472,7 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 		}
 		close(progressChan)
 
+		logger.Infof("\n✅ Download concluído: %s\n", local+nomeArquivo[len(nomeArquivo)-1])
 		fmt.Printf("\n✅ Download concluído: %s\n", local+nomeArquivo[len(nomeArquivo)-1])
 
 		return nil
@@ -463,7 +481,7 @@ func DownloadObject(configGlobal *ConfigGlobal, s3Client s3Downloader, bucket, p
 
 }
 
-func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3Client s3Downloader) {
+func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3Client s3Downloader, logger *logrus.Logger) {
 
 	input := &s3.ListObjectsV2Input{
 		Bucket:    &bucket,
@@ -474,6 +492,7 @@ func ListObjects(bucket, region, prefix, delimiter string, showVersion bool, s3C
 	result, erro := s3Client.ListObjectsV2(context.TODO(), input)
 	if erro != nil {
 		log.Fatal(erro)
+		logger.Error(erro)
 	}
 
 	// Exibe objetos
