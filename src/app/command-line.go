@@ -253,6 +253,7 @@ func backupRun(c *cli.Context) {
 		return nil
 
 	})
+
 	if err != nil {
 		logger.Errorf("Erro ao fazer backup: %v", err)
 		log.Fatalf("Erro ao fazer backup: %v", err)
